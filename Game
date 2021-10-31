@@ -1,0 +1,760 @@
+var LOW_GRAPHICS = false;
+
+var score = 0;
+var difficulty = 1.00;
+
+var COLORS = {
+    red: color(255, 0, 0),
+    orange: color(255, 128, 0),
+    yellow: color(255, 255, 0),
+    green: color(0, 255, 128),
+    blue: color(0, 170, 255),
+    indigo: color(0, 0, 255),
+    violet: color(128, 0, 255),
+    pink: color(255, 0, 128),
+    black: color(64, 64, 64),
+    gray: color(153, 153, 153),
+    white: color(255, 255, 255),
+};
+
+var FRICTION = 0.96;
+
+var STROKE_WEIGHT = 4;
+
+var entities = {};
+
+var index = 0;
+
+var font = loadFont('Roboto Bold', 50);
+
+var keys = [];
+
+var HAZARD = [
+    {
+        color: COLORS.red, 
+        radius: 16,
+        speed: 1.5,
+        health: 4,
+        abilities: [],
+        spawnProbability: {
+            weight: 400,
+            modifier: -1,
+        },
+    },
+    {
+        color: COLORS.yellow,
+        radius: 12,
+        speed: 5,
+        health: 2,
+        abilities: ["evadesProjectiles"],
+        spawnProbability: {
+            weight: 160,
+            modifier: -0.6
+        },
+    },
+    {
+        color: COLORS.green,
+        radius: 24,
+        speed: 1.5,
+        health: 6,
+        abilities: ["splitsOnDeath"],
+        spawnProbability: {
+            weight: 80,
+            modifier: -0.2
+        },
+    },
+    {
+        color: COLORS.orange,
+        radius: 20,
+        speed: 3,
+        health: 12,
+        abilities: [],
+        spawnProbability: {
+            weight: 40,
+            modifier: 0.2
+        },
+    },
+    {
+        color: COLORS.pink,
+        radius: 32,
+        speed: 0.45,
+        health: 32,
+        abilities: ["spawnsHazards"],
+        spawnProbability: {
+            weight: 5,
+            modifier: 0.6
+        },
+    },
+    {
+        color: COLORS.violet,
+        radius: 48,
+        speed: 0.15,
+        health: 48,
+        abilities: ["spawnsHazards"],
+        spawnProbability: {
+            weight: 1,
+            modifier: 1.0,
+        },
+    },
+];
+
+var createEntity = function (entity) {
+    entities[index] = entity;
+    index++;
+};
+
+var Entity = function (position, radius, health, speed, velocity, acceleration, team) {
+    this.position = position;
+    this._radius = radius;
+    this.speed = speed;
+    this.velocity = velocity;
+    this.acceleration = acceleration;
+    this.maxRadius = radius;
+    this.maxHealth = health;
+    this.team = team;
+    this._health = health;
+    this._healthSnap = health;
+    this._healthDisplay = health;
+    this._healthSnapDisplay = health;
+    this._healthSnapSyncTimer = 0;
+    this._opacity = 1;
+    this._hurtIndicator = 0;
+    this._healthBarOpacity = 0;
+    this._rotation = 0;
+    this._scale = 0;
+    this._isActive = true;
+    this._timeToLive = -1;
+    if (this.maxHealth > 1) {
+        this._healthBarWidth = this._radius * 2 + STROKE_WEIGHT;
+        this._healthBarHeight = STROKE_WEIGHT * 3;
+        this._healthBar = createGraphics(this._healthBarWidth, this._healthBarHeight, P2D);
+    }
+};
+
+Entity.prototype.drawHealthBar = function() {
+    var g = this._healthBar, w = this._healthBarWidth, h = this._healthBarHeight;
+    
+    if (g) {
+        g.beginDraw();
+        g.background(255, 0);
+        g.noStroke();
+        g.fill(COLORS.black);
+        g.rect(0, 0, w, h);
+        if (!LOW_GRAPHICS) {
+            g.fill(this._healthSnapDisplay >= this._healthDisplay ? frameCount % 15 < 5 ? COLORS.white : COLORS.red : COLORS.white);
+            g.rect(STROKE_WEIGHT, STROKE_WEIGHT, max(this._healthDisplay, this._healthSnapDisplay) / this.maxHealth * (w - STROKE_WEIGHT * 2), h / 3);
+            g.fill(COLORS.green);
+            g.rect(STROKE_WEIGHT, STROKE_WEIGHT, min(this._healthDisplay, this._healthSnapDisplay) / this.maxHealth * (w - STROKE_WEIGHT * 2), h / 3);
+        } else {
+            g.fill(COLORS.green);
+            g.rect(STROKE_WEIGHT, STROKE_WEIGHT, this._health / this.maxHealth * (w - STROKE_WEIGHT * 2), h / 3);
+        }
+        
+        g.endDraw();
+        
+        var o = floor(this._healthBarOpacity * this._opacity * 255);
+        
+        if (o > 0) {
+            if (o < 255 && !LOW_GRAPHICS) {
+                tint(255, 255, 255, o);
+            }
+            image(g, this.position.x - w / 2, this.position.y + this._radius + 10);
+            if (o < 255 && !LOW_GRAPHICS) {
+                noTint();
+            }
+        }
+    }
+};
+
+Entity.prototype.handleCollision = function(entity, overlap) {
+    var e = entity;
+    
+    if (this.team !== e.team) {
+      // decrement health
+      this._health -= min(1, this._health);
+
+      // reset health snapshot timer
+      this._healthSnapSyncTimer = 30;
+
+      // show damage indicator
+      this._hurtIndicator = 1;
+    }
+
+    var slopeFromEntity = atan2(this.position.y - e.position.y,
+        this.position.x - e.position.x);
+
+    var totalVelocity = sqrt(sq(this.velocity.x) + sq(this.velocity.y)) +
+        sqrt(sq(e.velocity.x) + sq(e.velocity.y));
+
+    var massRatio = sq(e._radius) / (sq(this._radius) + sq(e._radius));
+
+    // redirect after collision
+    this.velocity.x = cos(slopeFromEntity) * totalVelocity * massRatio;
+    this.velocity.y = sin(slopeFromEntity) * totalVelocity * massRatio;
+
+    this.position.x += cos(slopeFromEntity) * overlap * massRatio;
+    this.position.y += sin(slopeFromEntity) * overlap * massRatio;
+};
+
+Entity.prototype.checkForCollision = function(index) {
+    for (var i in entities) {
+        var e = entities[i];
+        var minDistance = (this._radius + STROKE_WEIGHT / 2) * this._scale + (e._radius + STROKE_WEIGHT / 2) * e._scale;
+        var distance = dist(this.position.x, this.position.y, e.position.x, e.position.y);
+        if (i !== this.index && distance < minDistance && e._isActive) {
+            this.handleCollision(e, minDistance - distance);
+            e.handleCollision(this, minDistance - distance);
+        }
+    }
+};
+
+Entity.prototype.animate = function() {
+    
+    // hide and show the health bar
+    if (this._health < this.maxHealth) {
+        this._healthBarOpacity += min(0.1, 1 - this._healthBarOpacity);
+    } else if (this._healthSnap >= this.maxHealth) {
+        this._healthBarOpacity -= min(0.1, this._healthBarOpacity);
+    }
+    
+    // animate health display and health snapshot display to match actual values
+    this._healthDisplay += (this._health - this._healthDisplay) / 2;
+    this._healthSnapDisplay += (this._healthSnap - this._healthSnapDisplay) / 8;
+    
+    // sync health snapshot to actual health value when delay timer depletes
+    if (this._healthSnapSyncTimer <= 0) {
+        this._healthSnap = this._health;
+    }
+    
+    // decrement sync health snapshot delay timer
+    this._healthSnapSyncTimer -= min(1, this._healthSnapSyncTimer);
+    
+    // animate hurt indicator
+    this._hurtIndicator -= min(0.05, this._hurtIndicator);
+    
+    if (this._isActive) {
+        // check for collision
+        this.checkForCollision();
+        
+        // spinning effect
+        this._rotation += 2 * sqrt(sq(this.velocity.x) + sq(this.velocity.y));
+        
+        // shrinking effect
+        this._radius += ((this._health / this.maxHealth * 0.3 + 0.7) * this.maxRadius -
+            this._radius) / 20;
+        
+        // add acceleration vector to velocity vector
+        this.velocity.x += this.acceleration.x;
+        this.velocity.y += this.acceleration.y;
+        
+        // multiply velocity vector heading by friction constant
+        this.velocity.x *= FRICTION;
+        this.velocity.y *= FRICTION;
+        
+        // add velocity vector to position vector
+        this.position.x += this.velocity.x;
+        this.position.y += this.velocity.y;
+        
+        // set turret inactive if health depleted
+        if (this._health === 0) {
+            this._isActive = false;
+        }
+        
+        // set turret inactive if time to live depleted
+        if (this._timeToLive === 0) {
+            this._isActive = false;
+        }
+        
+        // decrement time to live
+        this._timeToLive--;
+        
+        // spawn animation
+        this._scale += constrain(0.04 * this.speed, 0.1, 1 - this._scale);
+        this._opacity += constrain(0.04 * this.speed, 0.1, 1 - this._opacity);
+        
+        // regenerate health over time
+        if (frameCount % 180 === 0) {
+            if (this.maxHealth - this._health !== 0) {
+                this._healthSnapSyncTimer = 30;
+            }
+            this._health += min(1, this.maxHealth - this._health);
+        }
+    } else {
+        // death animation
+        this._scale += 0.05;
+        this._opacity -= min(0.1, this._opacity);
+        
+        // delete self if not visible
+        if (this._opacity === 0) {
+            delete entities[this.index];
+        }
+    }
+};
+
+var Hazard = function (position, velocity, color, radius, speed, health, abilities) {
+    Entity.call(this, position, radius, health, speed, velocity, { x: 0, y: 0 }, 1);
+    this.color = color;
+    this.abilities = abilities;
+    this._timeToLive = 3600;
+    this._hasSplit = false;
+    this._heading = null;
+    this._hazardSpawnTimer = 0;
+    this._graphicSize = (this._radius + STROKE_WEIGHT) * 3;
+    this._type = 'hazard';
+    this._graphic = createGraphics(this._graphicSize, this._graphicSize, P2D);
+};
+
+Hazard.prototype = Object.create(Entity.prototype);
+
+Hazard.prototype.attackTurrets = function () {
+    var targetIndex = -1;
+    var minDistance = 600;
+    for (var i in entities) {
+        var e = entities[i];
+        if (e._timeToLive > 0) {
+            continue;
+        }
+        var distance = dist(this.position.x, this.position.y, e.position.x, e.position.y);
+        if (distance <= minDistance) {
+            minDistance = distance;
+            targetIndex = i;
+        }
+    }
+    if (targetIndex !== -1) {
+        if (this.abilities.includes('spawnsHazards')) {
+            this.spawnHazards();
+        }
+        var e = entities[targetIndex];
+        this._heading = atan2(e.position.y - this.position.y,
+            e.position.x - this.position.x);
+    }
+    else {
+        this._heading = null;
+    }
+};
+
+Hazard.prototype.splitOnDeath = function () {
+    if (!this._isActive && !this._hasSplit) {
+        this._hasSplit = true;
+        for (var i = 0; i < 3; i++) {
+            var slope = random(360) + i * 120;
+            var position = {
+                x: this.position.x + cos(slope) * this._radius * 2,
+                y: this.position.y + sin(slope) * this._radius * 2,
+            };
+            var velocity = {
+                x: cos(slope) * this.speed * 4,
+                y: sin(slope) * this.speed * 4,
+            };
+            var radius = this.maxRadius * 0.6;
+            var health = this.maxHealth / 2;
+            var speed = this.speed * 2;
+            createEntity(new Hazard(position, velocity, this.color, radius, speed,
+                health, []));
+        }
+    }
+};
+
+Hazard.prototype.evadeProjectiles = function () {
+    for (var i in entities) {
+        var e = entities[i];
+        if (e._type !== 'projectile') {
+            continue;
+        }
+        var distance = dist(e.position.x, e.position.y, this.position.x, this.position.y);
+        
+        var threshold = (e._radius + this._radius) * 2;
+        
+        // check if projectile is near hazard
+        if (distance <= threshold && this._isActive && e._isActive) {
+            // slope from projectile to hazard
+            var slope = atan2(this.position.y - e.position.y,
+                this.position.x - e.position.x);
+            
+            // move hazard away from projectile
+            this.velocity.x += cos(slope) * this.speed / 2;
+            this.velocity.y += sin(slope) * this.speed / 2;
+        }
+    }
+};
+
+Hazard.prototype.spawnHazards = function () {
+    if (this._hazardSpawnTimer === 0) {
+        var slope = random(360);
+        var position = {
+          x: this.position.x + cos(slope) * (this._radius + 20),
+          y: this.position.y + sin(slope) * (this._radius + 20),
+        };
+        var velocity = {
+            x: cos(slope) * 8,
+            y: sin(slope) * 8,
+        };
+        
+        createEntity(new Hazard(position, velocity, this.color, 12, 6,
+            2, []));
+        
+        // reset hazard spawn timer
+        this._hazardSpawnTimer = floor(1920 / this.maxRadius);
+    }
+    this._hazardSpawnTimer -= min(1, this._hazardSpawnTimer);
+};
+
+Hazard.prototype.draw = function() {
+    var g = this._graphic, s = this._graphicSize, h = this._hurtIndicator.toFixed(1);
+    
+    Entity.prototype.drawHealthBar.call(this);
+    
+    if (this.position.x > -s / 2 && this.position.x < width + s / 2 &&
+        this.position.y > -s / 2 && this.position.y < height + s / 2) {
+        
+        g.beginDraw();
+        g.angleMode = 'degrees';
+        g.background(255, 0);
+        g.translate(s / 2, s / 2);
+        g.scale(this._scale);
+        g.rotate(this._rotation);
+        g.strokeWeight(STROKE_WEIGHT);
+        g.stroke(LOW_GRAPHICS ? COLORS.black : lerpColor(COLORS.black, COLORS.red, h));
+        g.fill(LOW_GRAPHICS ? this.color : lerpColor(this.color, COLORS.red, h));
+        g.beginShape();
+        for (var i = 0; i <= 10; i++) {
+          g.vertex(sin(i * 45) * this._radius,
+            cos(i * 45) * this._radius);
+          g.vertex(sin(i * 45 + 22.5) * this._radius * 2 / 3,
+            cos(i * 45 + 22.5) * this._radius * 2 / 3);
+        }
+        g.endShape();
+        g.resetMatrix();
+        g.endDraw();
+        
+        var o = floor(this._opacity * 255);
+        
+        if (o > 0) {
+            if (o < 255 && !LOW_GRAPHICS) {
+                tint(255, 255, 255, o);
+            }
+            image(g, this.position.x - s / 2, this.position.y - s / 2);
+            if (o < 255 && !LOW_GRAPHICS) {
+                noTint();
+            }
+        }
+    }
+};
+
+Hazard.prototype.animate = function () {
+    Entity.prototype.animate.call(this);
+    
+    if (!this._isActive && this._opacity <= 0) {
+        score += this.maxHealth * difficulty;
+    }
+    
+    this.attackTurrets();
+    
+    // abilities
+    if (this.abilities.includes('evadesProjectiles')) {
+        this.evadeProjectiles();
+    }
+    if (this.abilities.includes('splitsOnDeath')) {
+        this.splitOnDeath();
+    }
+    
+    // set acceleration vector from heading
+    if (this._heading !== null) {
+        this.acceleration.x = cos(this._heading) * this.speed * (1 - FRICTION) / FRICTION;
+        this.acceleration.y = sin(this._heading) * this.speed * (1 - FRICTION) / FRICTION;
+    } else {
+        this.acceleration.x = 0;
+        this.acceleration.y = 0;
+    }
+};
+
+var Projectile = function (position, heading) {
+    var speed = 6;
+    var velocity = { x: cos(heading) * speed, y: sin(heading) * speed };
+    Entity.call(this, position, 8, 1, speed, velocity, { x: 0, y: 0}, 0);
+    this._type = 'projectile';
+    this._timeToLive = 300;
+    this._graphicSize = (this._radius + STROKE_WEIGHT / 2) * 3;
+    this._graphic = createGraphics(this._graphicSize, this._graphicSize, P2D);
+    this._heading = heading;
+};
+
+Projectile.prototype = Object.create(Entity.prototype);
+
+Projectile.prototype.draw = function() {
+    var g = this._graphic, s = this._graphicSize, h = this._hurtIndicator.toFixed(1);
+    
+    Entity.prototype.drawHealthBar.call(this);
+    
+    if (this.position.x > -s / 2 && this.position.x < width + s / 2 &&
+        this.position.y > -s / 2 && this.position.y < height + s / 2) {
+        
+        g.beginDraw();
+        g.angleMode = 'degrees';
+        g.background(255, 0);
+        g.translate(s / 2, s / 2);
+        g.scale(this._scale);
+        g.rotate(this._rotation);
+        g.strokeWeight(STROKE_WEIGHT);
+        g.stroke(LOW_GRAPHICS ? COLORS.black : lerpColor(COLORS.black, COLORS.red, h));
+        g.fill(LOW_GRAPHICS ? COLORS.blue : lerpColor(COLORS.blue, COLORS.red, h));
+        g.beginShape();
+        for (var i = 0; i <= 8; i++) {
+            g.vertex(sin(i * 60) * this._radius, cos(i * 60) * this._radius);
+        }
+        g.endShape();
+        g.resetMatrix();
+        g.endDraw();
+        
+        var o = floor(this._opacity * 255);
+        
+        if (o > 0) {
+            if (o < 255 && !LOW_GRAPHICS) {
+                tint(255, 255, 255, o);
+            }
+            image(g, this.position.x - s / 2, this.position.y - s / 2);
+            if (o < 255 && !LOW_GRAPHICS) {
+                noTint();
+            }
+        }
+    }
+};
+
+Projectile.prototype.animate = function() {
+    var s = this._graphicSize;
+    
+    if (this.position.x < -s / 2 || this.position.x > width + s / 2 &&
+        this.position.y < -s / 2 || this.position.y > height + s / 2) {
+        delete entities[this.index];
+    }
+    
+    Entity.prototype.animate.call(this);
+    
+    // set acceleration vector from heading
+    if (this._heading !== null) {
+        this.acceleration.x = cos(this._heading) * this.speed * (1 - FRICTION) / FRICTION;
+        this.acceleration.y = sin(this._heading) * this.speed * (1 - FRICTION) / FRICTION;
+    } else {
+        this.acceleration.x = 0;
+        this.acceleration.y = 0;
+    }
+};
+
+var Turret = function (position) {
+    Entity.call(this, position, 24, 24, 3, { x: 0, y: 0 }, { x: 0, y: 0}, 0);
+    this.rotSpeed = 5;
+    this.spread = 12;
+    this.fireRate = 6;
+    this._recoil = 0;
+    this._barrelSlope = 0;
+    this._type = 'turret';
+    this._graphicSize = sqrt(sq(this._radius * 5 / 3 + STROKE_WEIGHT / 2) +
+        sq(this._radius / 3 + STROKE_WEIGHT / 2)) * 3;
+    this._graphic = createGraphics(this._graphicSize, this._graphicSize, P2D);
+    this._projectileTimer = 0;
+    this._hazardTimer = 0;
+};
+
+Turret.prototype = Object.create(Entity.prototype);
+
+Turret.prototype.draw = function() {
+    var g = this._graphic, s = this._graphicSize, h = this._hurtIndicator.toFixed(1);
+    
+    Entity.prototype.drawHealthBar.call(this);
+    
+    if (this.position.x > -s / 2 && this.position.x < width + s / 2 &&
+        this.position.y > -s / 2 && this.position.y < height + s / 2) {
+        
+        g.beginDraw();
+        g.angleMode = 'degrees';
+        g.background(255, 0);
+        g.translate(s / 2, s / 2);
+        g.scale(this._scale);
+        g.rotate(this._barrelSlope);
+        g.strokeWeight(STROKE_WEIGHT);
+        g.stroke(LOW_GRAPHICS ? COLORS.black : lerpColor(COLORS.black, COLORS.red, h));
+        g.fill(LOW_GRAPHICS ? COLORS.gray : lerpColor(COLORS.gray, COLORS.red, h));
+        g.rect(0, -this._radius / 3, this._radius * 5 / 3 - this._recoil * this._radius / 5,
+            this._radius * 2 / 3);
+        g.rotate(this._rotation - this._barrelSlope);
+        g.fill(LOW_GRAPHICS ? COLORS.blue: lerpColor(COLORS.blue, COLORS.red, h));
+        g.beginShape();
+        for (var i = 0; i <= 7; i++) {
+          g.vertex(sin(i * 60) * this._radius, cos(i * 60) * this._radius);
+        }
+        g.endShape();
+        g.rotate(-this._rotation);
+        g.fill(LOW_GRAPHICS ? COLORS.black : lerpColor(COLORS.black, COLORS.red, h));
+        g.noStroke();
+        g.textAlign(CENTER, CENTER);
+        g.textFont(font, this._radius * 5 / 3 * pow(0.8, score.toString().length));
+        g.text(score, 0, 0);
+        g.resetMatrix();
+        g.endDraw();
+        
+        var o = floor(this._opacity * 255);
+        
+        if (o > 0) {
+            if (o < 255 && !LOW_GRAPHICS) {
+                tint(255, 255, 255, o);
+            }
+            image(g, this.position.x - s / 2, this.position.y - s / 2);
+            if (o < 255 && !LOW_GRAPHICS) {
+                noTint();
+            }
+        }
+    }
+};
+
+Turret.prototype.rotateToCursor = function() {
+    var slopeToCursor = atan2(mouseY - this.position.y, mouseX - this.position.x);
+    var normalizedRotation = atan2(sin(this._barrelSlope), cos(this._barrelSlope));
+    if (abs(normalizedRotation - slopeToCursor) <= this.rotSpeed) {
+      this._barrelSlope = slopeToCursor;
+    } else {
+      var delta = (slopeToCursor - normalizedRotation);
+      delta += delta < 0 ? 360 : delta >= 360 ? -360 : 0;
+      this._barrelSlope += delta < 180 ? this.rotSpeed : -this.rotSpeed;
+      this._barrelSlope += this._barrelSlope < 0 ? 360 : this._barrelSlope >= 360 ? -360 : 0;
+    }
+};
+
+Turret.prototype.shootProjectiles = function() {
+    if (mouseIsPressed) {
+        // shoot projectile when timer depletes
+        if (this._projectileTimer <= 0) {
+            
+            // recoil effect on turret
+            this._recoil = 1;
+            
+            var separation = (this._radius + STROKE_WEIGHT / 2) * this._scale +
+                (4 + STROKE_WEIGHT / 2) * 1.5;
+            
+            var position = {
+                x: this.position.x + cos(this._barrelSlope) * separation,
+                y: this.position.y + sin(this._barrelSlope) * separation,
+            };
+            
+            var slope = this._barrelSlope +
+                random(-this.spread / 2, this.spread / 2);
+            
+            createEntity(new Projectile(position, slope));
+            
+            // reset projectile timer to fire rate
+            this._projectileTimer = ceil(60 / this.fireRate);
+        }
+    }
+    // decrement timer
+    this._projectileTimer -= 5;
+};
+
+Turret.prototype.spawnHazards = function() {
+    this.position.x = constrain(this.position.x, 0, 400);
+    this.position.y = constrain(this.position.y, 0, 400);
+    // spawn hazard when hazard timer depletes
+    if (this._hazardTimer === 0) {
+        var angle = random(360);
+        var position = {
+            x: width / 2 + cos(angle) * 200,
+            y: height / 2 + sin(angle) * 200,
+        };
+        var slope = atan2(this.position.y - position.y, this.position.x - position.x);
+        var velocity = { x: 0, y: 0 };
+        
+        // determine total weight of all hazard types
+        var modifiedWeight = [], total = 0;
+        HAZARD.forEach(function (h, i) {
+            modifiedWeight[i] = h.spawnProbability.weight *
+                pow(difficulty, h.spawnProbability.modifier);
+            total += modifiedWeight[i];
+        });
+        
+        // determine hazard type to spawn
+        var roll = random(total), hazardType;
+        HAZARD.forEach(function(h, i) {
+            if (hazardType === undefined && roll < modifiedWeight[i]) {
+                hazardType = i;
+            }
+            else {
+                roll -= modifiedWeight[i];
+            }
+        });
+        
+        var h = HAZARD[hazardType];
+        
+        createEntity(new Hazard(position, velocity, h.color, h.radius, h.speed,
+            h.health, h.abilities));
+        
+        // reset hazard timer based on current difficulty
+        this._hazardTimer = ceil(240 / sqrt(difficulty));
+    }
+    
+    // decrement hazard timer
+    this._hazardTimer -=3;
+};
+
+Turret.prototype.animate = function() {
+    Entity.prototype.animate.call(this);
+    
+    this.rotateToCursor();
+    
+    if (this._isActive) {
+        this.shootProjectiles();
+        this.spawnHazards();
+    }
+    
+    this._recoil *= 0.9;
+    
+    // set acceleration vector heading from arrow/WASD key input
+    this.acceleration.x = keys[39] || keys[68] ? 1 : keys[37] || keys[65] ? -1 : 0;
+    this.acceleration.y = keys[40] || keys[83] ? 1 : keys[38] || keys[87] ? -1 : 0;
+
+    // normalize acceleration vector
+    var magnitude = sqrt(sq(this.acceleration.x) + sq(this.acceleration.y));
+    if (magnitude !== 0) {
+        this.acceleration.x /= magnitude;
+        this.acceleration.y /= magnitude;
+    }
+
+    // set acceleration vector heading from turret speed and friction constant
+    this.acceleration.x *= this.speed * (1 - FRICTION) / FRICTION;
+    this.acceleration.y *= this.speed * (1 - FRICTION) / FRICTION;
+};
+
+createEntity(new Turret({ x: 200, y: 200 }));
+
+
+cursor(CROSS);
+
+var json = (function() { return this.JSON; })();
+draw = function() {
+    frameRate(60);
+    background(220);
+    var t = false;
+    for (var i in entities) {
+        var e = entities[i];
+        e.index = i;
+        e.draw();
+        e.animate();
+        if (e._type === 'turret') {
+            t = true;
+        }
+    }
+    if (!t) {
+        fill(COLORS.black);
+        textAlign(CENTER, CENTER);
+        textFont(font, 100);
+        text(score, 200, 200);
+    }
+    frameRate(60);
+};
+
+keyPressed = function() {
+    keys[keyCode] = true;
+};
+
+keyReleased = function() {
+    keys[keyCode] = false;
+};
+
+
